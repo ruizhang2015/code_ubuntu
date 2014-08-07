@@ -113,8 +113,8 @@ class QLearningAgent(ReinforcementAgent):
     sample = reward + self.gamma * self.getValue(nextState)
     self.qvalues[state, action] += self.alpha * sample
     
-    if (state == (3,0)):
-      print action, nextState, reward
+    #if (state == (3,0)):
+     # print action, nextState, reward
 
     
 class PacmanQAgent(QLearningAgent):
