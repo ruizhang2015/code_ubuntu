@@ -56,8 +56,9 @@ class QLearningAgent(ReinforcementAgent):
         return 0.0
     value = -1000
     for action in actions:
-        if (value < self.qvalues[state, action]):
-            value = self.qvalues[state, action]
+      qvalue = self.getQValue(state, action)
+      if (value < qvalue):
+        value = qvalue
     return value
     
   def getPolicy(self, state):
@@ -72,8 +73,9 @@ class QLearningAgent(ReinforcementAgent):
       return None
     maxqvalue = -1000
     for action in legalActions:
-      if (maxqvalue < self.qvalues[state, action]):
-        maxqvalue = self.qvalues[state, action]
+      qvalue = self.qvalues[state, action]
+      if (maxqvalue < qvalue):
+        maxqvalue = qvalue
         optact = action
     return optact
 
@@ -113,9 +115,6 @@ class QLearningAgent(ReinforcementAgent):
     sample = reward + self.gamma * self.getValue(nextState)
     self.qvalues[state, action] += self.alpha * sample
     
-    #if (state == (3,0)):
-     # print action, nextState, reward
-
     
 class PacmanQAgent(QLearningAgent):
   "Exactly the same as QLearningAgent, but with different default parameters"
@@ -162,6 +161,7 @@ class ApproximateQAgent(PacmanQAgent):
 
     # You might want to initialize weights here.
     "*** YOUR CODE HERE ***"
+    self.w = util.Counter()
     
   def getQValue(self, state, action):
     """
@@ -169,14 +169,20 @@ class ApproximateQAgent(PacmanQAgent):
       where * is the dotProduct operator
     """
     "*** YOUR CODE HERE ***"
-    util.raiseNotDefined()
+    feats = self.featExtractor.getFeatures(state, action)
+    self.qvalues[state, action] = self.w * feats
+    return self.qvalues[state, action]
     
   def update(self, state, action, nextState, reward):
     """
        Should update your weights based on transition  
     """
     "*** YOUR CODE HERE ***"
-    util.raiseNotDefined()
+    diff = reward + self.gamma * self.getValue(nextState) - self.getQValue(state, action)
+    feats = self.featExtractor.getFeatures(state, action)
+    for key in feats.keys():
+      self.w[key] += self.alpha * diff * feats[key]
+
     
   def final(self, state):
     "Called at the end of each game."
