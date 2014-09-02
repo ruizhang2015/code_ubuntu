@@ -20,7 +20,9 @@ class TextGridworldDisplay:
     for state in states:
       values[state] = agent.getValue(state)
       policy[state] = agent.getPolicy(state)
-    prettyPrintValues(self.gridworld, values, policy, currentState)
+    print values
+    print policy
+    #prettyPrintValues(self.gridworld, values, policy, currentState)
   
   def displayNullValues(self, agent, currentState = None, message = None):
     if message != None: print message
@@ -33,7 +35,8 @@ class TextGridworldDisplay:
     for state in states:
       for action in self.gridworld.getPossibleActions(state):
         qValues[(state, action)] = agent.getQValue(state, action)
-    prettyPrintQValues(self.gridworld, qValues, currentState)
+    print qValues
+    #prettyPrintQValues(self.gridworld, qValues, currentState)
 
 
 def prettyPrintValues(gridWorld, values, policy=None, currentState = None):

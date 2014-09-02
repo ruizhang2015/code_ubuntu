@@ -5,25 +5,62 @@ import environment
 import util
 import optparse
 import time
+from physicalMachine import *
 
 class BaePlatform(mdp.MarkovDecisionProcess):
   """
     BaePlatform
   """
-  def __init__(self):
+  def __init__(self, pm):
     # layout
     #if type(grid) == type([]): grid = makeGrid(grid)
     #self.grid = grid
     
     # parameters
     self.livingReward = 0.0
-    self.noise = 0.0
-        
-  def setNoise(self, noise):
+    self.numinteration = 16
+    self.currentnum = 0
+    self.pm = pm
+       
+  def doAction(self, state, action):
+    print "mem,cpu"
+    print self.pm.mem,self.pm.cpu
+    plController = PlatformController()
+    if action == 'nop':
+      return state
+    if action == 'inch':
+      for id in self.pm.instances.keys():
+	ins =  self.pm.instances[id]
+	if ins.isFailed():
+	  plController.add(ins)
+      return self.pm.getState()
+    if action == 'incv':
+      for id in self.pm.instances.keys():
+	ins =  self.pm.instances[id]
+	if ins.isFailed():
+	  self.pm.enlargeInstance(id, ins.mem)
+      return self.pm.getState()
+    if action == 'decv':
+      for id in self.pm.instances.keys():
+	ins =  self.pm.instances[id]
+	if not ins.isFailed() and ins.mem >= 1:
+	  self.pm.shrinkInstance(id, ins.mem/2)
+      return self.pm.getState()
+    if action == 'dech':
+      for id in self.pm.instances.keys():
+	ins =  self.pm.instances[id]
+	if not ins.isFailed() and ins.cpu < 20:
+	  plController.dec(id)
+      return self.pm.getState()
+    if action == 'move':
+      #plController.move
+      return self.pm.getState()
+
+  def setNoise(self, numinteration):
     """
     The probability of moving in an unintended direction.
     """
-    self.noise = noise
+    self.numinteration = numinteration
         
                                     
   def getPossibleActions(self, state):
@@ -37,11 +74,19 @@ class BaePlatform(mdp.MarkovDecisionProcess):
     #if state == self.grid.terminalState:
      # return ()
     ucpu,umem,nvins = state
-    if ucpu == 2 and umem == 2 and nvins == 3:
-      return ('nop','move','dech','decv')
-    if ucpu == 2 or umem == 2 or nvins == 3:
-      return ('nop','move','dech','decv')
-    return ('nop',)
+    ops = ['nop','move','dech','decv','inch','incv']
+    if ucpu == 2:
+      ops.remove('dech')
+      ops.remove('decv')
+    if umem == 2:
+      ops.remove('incv')
+    if ucpu == 0:
+      ops.remove('inch')
+      if 'incv' in ops: ops.remove('incv')
+    if nvins > 0:
+      if 'dech' in ops: ops.remove('dech')
+      if 'decv' in ops: ops.remove('decv')
+    return ops
     
   def getStates(self):
     """
@@ -66,7 +111,7 @@ class BaePlatform(mdp.MarkovDecisionProcess):
     """
     ucpu,umem,nvins = state
     nucpu,numem,nnvins = nextState
-    reward = (nnvins - nvins) * 5
+    reward = (nvins - nnvins) * 5
     if nucpu == 1 and ucpu != 1: 
       reward += 1
     if numem == 1 and umem != 1: 
@@ -80,8 +125,11 @@ class BaePlatform(mdp.MarkovDecisionProcess):
         
   def getState(self):
     # TO DO: get state from monitor
-    state = (0,0,1)
+    state = self.pm.getState()
     return state
+  
+  def isTerminal(self):
+    return self.numinteration == self.currentnum
        
 class BaeplatformEnvironment(environment.Environment):
     
@@ -98,13 +146,20 @@ class BaeplatformEnvironment(environment.Environment):
   def doAction(self, action):
     state = self.getCurrentState()
     # TO DO: execute the action and get nextState
-    nextState = (1,1,0)
-    reward = self.baePlatform.getReward(state, action, nextState)
+    nextState = self.baeplatform.doAction(state, action)
+    reward = self.baeplatform.getReward(state, action, nextState)
+    self.baeplatform.currentnum += 1
     self.state = nextState
     return (nextState, reward)
         
   def reset(self):
-    self.state = self.baePlatform.getStartState()
+    self.baeplatform.currentnum = 0
+    self.state = self.baeplatform.getState()
+  
+  def isTerminal(self):
+    return self.baeplatform.isTerminal()
+
+def printString(x): print x
 
 def getUserAction(state, actionFunction):
   """
@@ -128,25 +183,29 @@ def getUserAction(state, actionFunction):
     action = actions[0]
   return action
 
-def runEpisode(agent, environment, discount, decision, display, message, pause, episode):
+def runEpisode(agent, environment, discount, decision, display, message, pause, episode, rates, offset):
   returns = 0
   totalDiscount = 1.0
   environment.reset()
   if 'startEpisode' in dir(agent): agent.startEpisode()
   message("BEGINNING EPISODE: "+str(episode)+"\n")
+  pm = environment.baeplatform.pm
   while True:
 
     # DISPLAY CURRENT STATE
     state = environment.getCurrentState()
-    print(state)
     pause()
     
     # END IF IN A TERMINAL STATE
-    actions = environment.getPossibleActions(state)
-    if len(actions) == 0:
+    if environment.isTerminal():
       message("EPISODE "+str(episode)+" COMPLETE: RETURN WAS "+str(returns)+"\n")
-      return returns
-    
+      return returns, offset
+    #print rates[offset%len(rates)]
+    pm.readFromFile()
+    for id in pm.instances.keys():
+      ins = pm.instances[id]
+      ins.setByReqrate(rates[offset%len(rates)])
+    offset += 1
     # GET ACTION (USUALLY FROM AGENT)
     action = decision(state)
     if action == None:
@@ -159,11 +218,12 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
             "\nEnded in state: "+str(nextState)+
             "\nGot reward: "+str(reward)+"\n")    
     # UPDATE LEARNER
-    if 'observeTransition' in dir(agent): 
+    if 'observeTransition' in dir(agent):
         agent.observeTransition(state, action, nextState, reward)
     
     returns += reward * totalDiscount
     totalDiscount *= discount
+    pm.writeToFile()
 
   if 'stopEpisode' in dir(agent):
     agent.stopEpisode()
@@ -235,33 +295,59 @@ def parseOptions():
       
     return opts
 
+def run(env, s, episodes, a, discount, decisionCallback, displayCallback, messageCallback, pauseCallback):
+  s.aquire()  
+  if episodes > 0:
+    print
+    print "RUNNING", opts.episodes, "EPISODES"
+    print
+  infile = open('infile')
+  rates = []
+  offset = 0
+  for line in infile:
+    rates.append(int(line))
+  returns = 0
+  for episode in range(1, episodes+1):
+    tmpre, offset = runEpisode(a, env, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode, rates, offset)
+    returns += tmpre 
+  if episodes > 0:
+    print
+    print "AVERAGE RETURNS FROM START STATE: "+str((returns+0.0) / episodes)
+    print 
+    print
+    
+    display.displayQValues(a, message = "Q-VALUES AFTER "+str(episodes)+" EPISODES")
+    display.pause()
+    display.displayValues(a, message = "VALUES AFTER "+str(episodes)+" EPISODES")
+    display.pause()
+  s.release()  
   
 if __name__ == '__main__':
   
-  opts = parseOptions()
-
-  ###########################
-  # GET THE GRIDWORLD
-  ###########################
-
+  import multiprocessing
   import baeplatform
-  #mdpFunction = getattr(gridworld, "get"+opts.grid)
-  #mdp = mdpFunction()
-  #mdp.setLivingReward(opts.livingReward)
-  #mdp.setNoise(opts.noise)
-  env = baeplatform.BaeplatformEnvironment()
+  opts = parseOptions()
+  env = []
+  for x in range(3):
+    pm = PhysicalMachine(x)
+    for i in range(50):
+      ins = Instance(i)
+      pm.addInstance(ins)
+    pm.writeToFile()
+    mdp = baeplatform.BaePlatform(pm)
+    env.append(baeplatform.BaeplatformEnvironment(mdp))
 
   ###########################
   # GET THE DISPLAY ADAPTER
   ###########################
-
   import textGridworldDisplay
   display = textGridworldDisplay.TextGridworldDisplay(mdp)
+  '''
   if not opts.textDisplay:
     import graphicsGridworldDisplay
     display = graphicsGridworldDisplay.GraphicsGridworldDisplay(mdp, opts.gridSize, opts.speed)
   display.start()
-
+  '''
   ###########################
   # GET THE AGENT
   ###########################
@@ -273,7 +359,7 @@ if __name__ == '__main__':
   elif opts.agent == 'q':
     #env.getPossibleActions, opts.discount, opts.learningRate, opts.epsilon
     #simulationFn = lambda agent, state: simulation.GridworldSimulation(agent,state,mdp)
-    gridWorldEnv = GridworldEnvironment(mdp)
+    #gridWorldEnv = GridworldEnvironment(mdp)
     actionFn = lambda state: mdp.getPossibleActions(state)
     qLearnOpts = {'gamma': opts.discount, 
                   'alpha': opts.learningRate, 
@@ -345,24 +431,13 @@ if __name__ == '__main__':
     decisionCallback = a.getAction  
     
   # RUN EPISODES
-  if opts.episodes > 0:
-    print
-    print "RUNNING", opts.episodes, "EPISODES"
-    print
-  returns = 0
-  for episode in range(1, opts.episodes+1):
-    returns += runEpisode(a, env, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode)
-  if opts.episodes > 0:
-    print
-    print "AVERAGE RETURNS FROM START STATE: "+str((returns+0.0) / opts.episodes)
-    print 
-    print
-    
-  # DISPLAY POST-LEARNING VALUES / Q-VALUES
-  if opts.agent == 'q' and not opts.manual:
-    display.displayQValues(a, message = "Q-VALUES AFTER "+str(opts.episodes)+" EPISODES")
-    display.pause()
-    display.displayValues(a, message = "VALUES AFTER "+str(opts.episodes)+" EPISODES")
-    display.pause()
-    
-   
+  s = multiprocessing.Semaphore(len(env))
+  execution_queue = []
+  for i in range(len(env)):
+    p = multiprocessing.Process(target=run, args=(env[i],s,opts.episodes, a, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback))
+    p.start()
+    execution_queue.append(p)
+  for p in execution_queue:
+    p.join()
+
+  
