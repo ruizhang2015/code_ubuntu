@@ -7,51 +7,55 @@ import optparse
 import time
 from physicalMachine import *
 
+
 class BaePlatform(mdp.MarkovDecisionProcess):
   """
     BaePlatform
   """
-  def __init__(self, pm):
+  def __init__(self, pm, numinteration):
     # layout
     #if type(grid) == type([]): grid = makeGrid(grid)
     #self.grid = grid
     
     # parameters
     self.livingReward = 0.0
-    self.numinteration = 16
+    self.numinteration = numinteration
     self.currentnum = 0
     self.pm = pm
        
-  def doAction(self, state, action):
-    print "mem,cpu"
+  def doAction(self, action, pmNum,locks,pllock):
+    #print "mem,cpu"
     print self.pm.mem,self.pm.cpu
-    plController = PlatformController()
+    plController =  PlatformController(pmNum, locks,pllock)
     if action == 'nop':
-      return state
+      return self.pm.getState()
     if action == 'inch':
       for id in self.pm.instances.keys():
-	ins =  self.pm.instances[id]
-	if ins.isFailed():
-	  plController.add(ins)
+        ins =  self.pm.instances[id]
+        if ins.isFailed():
+          plController.add(ins)
+      #print self.pm.cpu, self.pm.mem, len(self.pm.instances)
       return self.pm.getState()
     if action == 'incv':
       for id in self.pm.instances.keys():
-	ins =  self.pm.instances[id]
-	if ins.isFailed():
-	  self.pm.enlargeInstance(id, ins.mem)
+	      ins =  self.pm.instances[id]
+	      if ins.isFailed() and ins.mem <= 1:
+	        self.pm.enlargeInstance(id, ins.mem)
       return self.pm.getState()
     if action == 'decv':
       for id in self.pm.instances.keys():
-	ins =  self.pm.instances[id]
-	if not ins.isFailed() and ins.mem >= 1:
-	  self.pm.shrinkInstance(id, ins.mem/2)
+	      ins =  self.pm.instances[id]
+	      if not ins.isFailed() and ins.mem >= 0.5:
+	        self.pm.shrinkInstance(id, ins.mem/2)
       return self.pm.getState()
     if action == 'dech':
       for id in self.pm.instances.keys():
-	ins =  self.pm.instances[id]
-	if not ins.isFailed() and ins.cpu < 20:
-	  plController.dec(id)
-      return self.pm.getState()
+	      ins =  self.pm.instances[id]
+	      if not ins.isFailed() and ins.cpu < 80:
+	        plController.dec(id)
+      tmp =  self.pm.getState()
+      #print "============",tmp      
+      return tmp
     if action == 'move':
       #plController.move
       return self.pm.getState()
@@ -74,7 +78,7 @@ class BaePlatform(mdp.MarkovDecisionProcess):
     #if state == self.grid.terminalState:
      # return ()
     ucpu,umem,nvins = state
-    ops = ['nop','move','dech','decv','inch','incv']
+    ops = ['inch','incv','dech','decv','nop','move']
     if ucpu == 2:
       ops.remove('dech')
       ops.remove('decv')
@@ -86,7 +90,8 @@ class BaePlatform(mdp.MarkovDecisionProcess):
     if nvins > 0:
       if 'dech' in ops: ops.remove('dech')
       if 'decv' in ops: ops.remove('decv')
-    return ops
+    #return ops
+    return ['inch']
     
   def getStates(self):
     """
@@ -138,18 +143,17 @@ class BaeplatformEnvironment(environment.Environment):
     self.reset()
             
   def getCurrentState(self):
-    return self.state
+    return self.baeplatform.getState()
         
   def getPossibleActions(self, state):        
     return self.baeplatform.getPossibleActions(state)
         
-  def doAction(self, action):
-    state = self.getCurrentState()
+  def doAction(self, state, action, pmNum, locks,pllock):
+    #state = self.getCurrentState()
     # TO DO: execute the action and get nextState
-    nextState = self.baeplatform.doAction(state, action)
+    nextState = self.baeplatform.doAction(action,pmNum,locks,pllock)
     reward = self.baeplatform.getReward(state, action, nextState)
     self.baeplatform.currentnum += 1
-    self.state = nextState
     return (nextState, reward)
         
   def reset(self):
@@ -183,7 +187,7 @@ def getUserAction(state, actionFunction):
     action = actions[0]
   return action
 
-def runEpisode(agent, environment, discount, decision, display, message, pause, episode, rates, offset):
+def runEpisode(agent, environment, discount, decision, display, message, pause, episode, rates, offset, pmNum, locks,pllock):
   returns = 0
   totalDiscount = 1.0
   environment.reset()
@@ -192,9 +196,6 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
   pm = environment.baeplatform.pm
   while True:
 
-    # DISPLAY CURRENT STATE
-    state = environment.getCurrentState()
-    pause()
     
     # END IF IN A TERMINAL STATE
     if environment.isTerminal():
@@ -203,8 +204,14 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
     #print rates[offset%len(rates)]
     pm.readFromFile()
     for id in pm.instances.keys():
+      #print "id", id
       ins = pm.instances[id]
-      ins.setByReqrate(rates[offset%len(rates)])
+      #ins.setByReqrate(rates[offset%len(rates)])
+      ins.setByReqrate(25)
+    pm.writeToFile()
+    # DISPLAY CURRENT STATE
+    state = environment.getCurrentState()
+    pause()
     offset += 1
     # GET ACTION (USUALLY FROM AGENT)
     action = decision(state)
@@ -212,7 +219,7 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
       raise 'Error: Agent returned None action'
     
     # EXECUTE ACTION
-    nextState, reward = environment.doAction(action)
+    nextState, reward = environment.doAction(state, action, pmNum,locks,pllock)
     message("Started in state: "+str(state)+
             "\nTook action: "+str(action)+
             "\nEnded in state: "+str(nextState)+
@@ -223,7 +230,6 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
     
     returns += reward * totalDiscount
     totalDiscount *= discount
-    pm.writeToFile()
 
   if 'stopEpisode' in dir(agent):
     agent.stopEpisode()
@@ -247,11 +253,14 @@ def parseOptions():
                          type='float',dest='learningRate',default=0.5,
                          metavar="P", help='TD learning rate (default %default)' )
     optParser.add_option('-i', '--iterations',action='store',
-                         type='int',dest='iters',default=10,
-                         metavar="K", help='Number of rounds of value iteration (default %default)')
+                         type='int',dest='iters',default=16,
+                         metavar="K", help='Number of iterations in an episode (default %default)')
     optParser.add_option('-k', '--episodes',action='store',
                          type='int',dest='episodes',default=1,
                          metavar="K", help='Number of epsiodes of the MDP to run (default %default)')
+    optParser.add_option('-c', '--pmNum',action='store',
+                         type='int',dest='pmNum',default=1,
+                         metavar="K", help='Number of VMs to run (default %default)')
     optParser.add_option('-g', '--grid',action='store',
                          metavar="G", type='string',dest='grid',default="BookGrid",
                          help='Grid to use (case sensitive; options are BookGrid, BridgeGrid, CliffGrid, MazeGrid, default %default)' )
@@ -295,11 +304,11 @@ def parseOptions():
       
     return opts
 
-def run(env, s, episodes, a, discount, decisionCallback, displayCallback, messageCallback, pauseCallback):
-  s.aquire()  
+def run(i, env, s, episodes, a, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, pmNum, locks,pllock):
+  s.acquire()  
   if episodes > 0:
     print
-    print "RUNNING", opts.episodes, "EPISODES"
+    print "VM ", i, "RUNNING", opts.episodes, "EPISODES"
     print
   infile = open('infile')
   rates = []
@@ -308,17 +317,17 @@ def run(env, s, episodes, a, discount, decisionCallback, displayCallback, messag
     rates.append(int(line))
   returns = 0
   for episode in range(1, episodes+1):
-    tmpre, offset = runEpisode(a, env, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode, rates, offset)
+    tmpre, offset = runEpisode(a, env, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode, rates, offset, pmNum, locks, pllock)
     returns += tmpre 
   if episodes > 0:
     print
-    print "AVERAGE RETURNS FROM START STATE: "+str((returns+0.0) / episodes)
+    print "VM ", i, "AVERAGE RETURNS FROM START STATE: "+str((returns+0.0) / episodes)
     print 
     print
     
-    display.displayQValues(a, message = "Q-VALUES AFTER "+str(episodes)+" EPISODES")
+    display.displayQValues(a, message = "VM " + i + " Q-VALUES AFTER "+str(episodes)+" EPISODES")
     display.pause()
-    display.displayValues(a, message = "VALUES AFTER "+str(episodes)+" EPISODES")
+    display.displayValues(a, message = "VM " + i + " VALUES AFTER "+str(episodes)+" EPISODES")
     display.pause()
   s.release()  
   
@@ -328,14 +337,22 @@ if __name__ == '__main__':
   import baeplatform
   opts = parseOptions()
   env = []
-  for x in range(3):
-    pm = PhysicalMachine(x)
-    for i in range(50):
-      ins = Instance(i)
-      pm.addInstance(ins)
+  locks = []
+  pllock = multiprocessing.Semaphore(1)
+  for x in range(opts.pmNum):
+    lock = multiprocessing.Semaphore(1)
+    locks.append(lock)
+    pm = PhysicalMachine(x, lock)
+    name = 'vm_' + str(x) + '.info'
+    outfile = open(name,'w')
+    outfile.close()
+    #if x==0: continue
+    for i in range(25):
+      pm.addInstance(i)
     pm.writeToFile()
-    mdp = baeplatform.BaePlatform(pm)
+    mdp = baeplatform.BaePlatform(pm, opts.iters)
     env.append(baeplatform.BaeplatformEnvironment(mdp))
+  
 
   ###########################
   # GET THE DISPLAY ADAPTER
@@ -434,7 +451,7 @@ if __name__ == '__main__':
   s = multiprocessing.Semaphore(len(env))
   execution_queue = []
   for i in range(len(env)):
-    p = multiprocessing.Process(target=run, args=(env[i],s,opts.episodes, a, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback))
+    p = multiprocessing.Process(target=run, args=(str(i), env[i],s,opts.episodes, a, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, opts.pmNum, locks, pllock))
     p.start()
     execution_queue.append(p)
   for p in execution_queue:
