@@ -2,6 +2,7 @@ import multiprocessing
 import time
 import json
 import os
+#import baeplatform
 
 class Instance:
   def __init__(self, id, cpu = 0.0, mem = 1.0, rmem = 0.25, failed = False, pm = None, dup = 1):
@@ -12,6 +13,8 @@ class Instance:
     self.failed = failed 
     self.pm = pm
     self.dup = dup
+  def toStruct(self):
+    return [self.id, self.cpu, self.mem, self.rmem, self.failed, self.dup]
 
   def addMem(self, dmem):
     tmp = self.mem + dmem
@@ -58,12 +61,62 @@ class Instance:
     #print self.cpu,c0,self.rmem,m0
 
 class PhysicalMachine:
-  def __init__(self, id, lock):
+  def __init__(self, id, lock, q, plinfo):
     self.id = id
     self.cpu = 0.0
     self.mem = 0.0
     self.instances = {}
     self.lock = lock
+    self.q = q
+    self.plinfo = plinfo
+  
+  def toStruct(self):
+    list = []
+    for insid in self.instances.keys():
+      list.append(self.instances[insid].toStruct())
+    return [self.id, self.cpu, self.mem, list]
+  
+  def structTo(self, pm):
+    self.cpu = pm[1]
+    self.mem = pm[2]
+    list = pm[3]
+    self.instances = {}
+    for ins in list:
+      self.instances[ins[0]] = Instance(ins[0], ins[1], ins[2], ins[3],ins[4], self, ins[5])
+
+  def store(self):
+    list = []
+    while not self.plinfo.empty():
+      pm = self.plinfo.get()
+      if pm[0] == self.id:
+        break
+      list.append(pm)
+    pm = self.toStruct()
+    list.append(pm)
+    #print 'store:', pm
+    for pm in list:
+      self.plinfo.put(pm)
+      print 'put secc'
+
+  def load(self):
+    for _ in range(3):
+      if self.plinfo.empty():
+        time.sleep(0.1)
+      else:
+        break
+    list = []
+    while not self.plinfo.empty():
+      pm = self.plinfo.get()
+      list.append(pm)
+      if pm[0] == self.id:
+        self.structTo(pm)
+        break
+    for pm in list:
+      self.plinfo.put(pm)
+      time.sleep(0.5)
+    print 'load: none'
+    
+
   '''
   def modifyCpu(self, diff):
     self.readFromFile()
@@ -80,8 +133,12 @@ class PhysicalMachine:
       self.writeToFile()
   '''
   def addInstance(self, insid):
-    self.readFromFile()
+    #self.readFromFile()
+    print
+    print "BEGIN ", insid
+    self.load()
     if self.instances.has_key(insid):
+      print '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@'
       ins = self.instances[insid]
       if self.cpu + ins.cpu <= 100 and self.mem + ins.rmem <= 100:
         self.cpu -= ins.cpu
@@ -101,17 +158,23 @@ class PhysicalMachine:
       else:
         print self.id, 'add instance failed!'
         return False
-    self.writeToFile()
+    print self.id, insid,'add instance suc!'
+    self.q[insid] += 1
+    print "add, insid, q", insid, self.q[insid]
+    #self.writeToFile()
+    self.store()
     return True
 
   def enlargeInstance(self, insid, dmem):
-    self.readFromFile()
+    #self.readFromFile()
+    self.load()
     if self.instances.has_key(insid):
       self.instances[insid].addMem(dmem)
       self.writeToFile()
 
   def decInstance(self, insid):
-    self.readFromFile()
+    #self.readFromFile()
+    self.load()
     if self.instances.has_key(insid):
       ins = self.instances[insid]
       ins.dup -= 1
@@ -120,26 +183,33 @@ class PhysicalMachine:
       self.mem -= m
       if ins.dup == 0:
         del self.instances[insid]
-      self.writeToFile()
+      self.q[insid] -= 1
+      print "dec, insid, q", insid, self.q[insid]
+      #self.writeToFile()
+      self.store()
       return True
     return False
 
   def shrinkInstance(self, insid, dmem):
-    self.readFromFile()
+    #self.readFromFile()
+    self.load()
     if self.instances.has_key(insid):
       self.instances[insid].addMem(0 - dmem)
       self.writeToFile()
       
   def listInstances(self):
-    self.readFromFile()
+    #self.readFromFile()
+    self.load()
     return self.instances.keys()
   
   def getInstance(self, insid):
-    self.readFromFile()
+    #self.readFromFile()
+    self.load()
     return self.instances[insid]
 
   def getState(self):
-    self.readFromFile()
+    #self.readFromFile()
+    self.load()
     n = 0
     for id in self.instances.keys():
       ins = self.instances[id]
@@ -164,7 +234,7 @@ class PhysicalMachine:
       c = 2
     else:
       c = 3
-    #print (self.cpu,self.mem), (a,b,c) 
+    print (self.id,self.cpu,self.mem), (a,b,c) 
     return (a,b,c)
 
   def writeToFile(self):
@@ -222,19 +292,22 @@ class PhysicalMachine:
     return strs
 
 class PlatformController:
-  def __init__(self, pmNum, locks, pllock):
+  def __init__(self, pmNum, locks, pllock, q, plinfo):
     self.pmNum = pmNum
     self.pms = []
     self.locks = locks
     self.pllock = pllock
+    self.q = q
+    self.plinfo = plinfo
   
   def load(self):
     self.pms = []
     for i in range(self.pmNum):
-      pm = PhysicalMachine(i, self.locks[i])
-      if not pm.readFromFile():
-        print "AAA", pm.id
-        time.sleep(60)
+      pm = PhysicalMachine(i, self.locks[i],self.q, self.plinfo)
+      #if not pm.readFromFile():
+        #print "AAA", pm.id
+        #time.sleep(60)
+      pm.load()
       self.pms.append(pm)
 
   def add(self, ins):

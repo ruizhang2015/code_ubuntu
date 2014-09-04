@@ -1,4 +1,5 @@
 import random
+import multiprocessing
 import sys
 import mdp
 import environment
@@ -23,10 +24,10 @@ class BaePlatform(mdp.MarkovDecisionProcess):
     self.currentnum = 0
     self.pm = pm
        
-  def doAction(self, action, pmNum,locks,pllock):
+  def doAction(self, action, pmNum,locks,pllock, q, plinfo):
     #print "mem,cpu"
-    print self.pm.mem,self.pm.cpu
-    plController =  PlatformController(pmNum, locks,pllock)
+    #print self.pm.mem,self.pm.cpu
+    plController =  PlatformController(pmNum, locks,pllock, q, plinfo)
     if action == 'nop':
       return self.pm.getState()
     if action == 'inch':
@@ -34,7 +35,7 @@ class BaePlatform(mdp.MarkovDecisionProcess):
         ins =  self.pm.instances[id]
         if ins.isFailed():
           plController.add(ins)
-      #print self.pm.cpu, self.pm.mem, len(self.pm.instances)
+      #print "after inch",self.pm.id,self.pm.cpu, self.pm.mem
       return self.pm.getState()
     if action == 'incv':
       for id in self.pm.instances.keys():
@@ -51,7 +52,7 @@ class BaePlatform(mdp.MarkovDecisionProcess):
     if action == 'dech':
       for id in self.pm.instances.keys():
 	      ins =  self.pm.instances[id]
-	      if not ins.isFailed() and ins.cpu < 80:
+	      if not ins.isFailed():
 	        plController.dec(id)
       tmp =  self.pm.getState()
       #print "============",tmp      
@@ -78,7 +79,7 @@ class BaePlatform(mdp.MarkovDecisionProcess):
     #if state == self.grid.terminalState:
      # return ()
     ucpu,umem,nvins = state
-    ops = ['inch','incv','dech','decv','nop','move']
+    ops = ['nop','inch','incv','dech','decv','move']
     if ucpu == 2:
       ops.remove('dech')
       ops.remove('decv')
@@ -91,7 +92,7 @@ class BaePlatform(mdp.MarkovDecisionProcess):
       if 'dech' in ops: ops.remove('dech')
       if 'decv' in ops: ops.remove('decv')
     #return ops
-    return ['inch']
+    return ['inch','dech']
     
   def getStates(self):
     """
@@ -148,10 +149,10 @@ class BaeplatformEnvironment(environment.Environment):
   def getPossibleActions(self, state):        
     return self.baeplatform.getPossibleActions(state)
         
-  def doAction(self, state, action, pmNum, locks,pllock):
+  def doAction(self, state, action, pmNum, locks,pllock, q, plinfo):
     #state = self.getCurrentState()
     # TO DO: execute the action and get nextState
-    nextState = self.baeplatform.doAction(action,pmNum,locks,pllock)
+    nextState = self.baeplatform.doAction(action,pmNum,locks,pllock, q, plinfo)
     reward = self.baeplatform.getReward(state, action, nextState)
     self.baeplatform.currentnum += 1
     return (nextState, reward)
@@ -187,12 +188,12 @@ def getUserAction(state, actionFunction):
     action = actions[0]
   return action
 
-def runEpisode(agent, environment, discount, decision, display, message, pause, episode, rates, offset, pmNum, locks,pllock):
+def runEpisode(agent, environment, discount, decision, display, message, pause, episode, rates, offset, pmNum, locks,pllock , q,plinfo):
   returns = 0
   totalDiscount = 1.0
   environment.reset()
   if 'startEpisode' in dir(agent): agent.startEpisode()
-  message("BEGINNING EPISODE: "+str(episode)+"\n")
+  #message("BEGINNING EPISODE: "+str(episode)+"\n")
   pm = environment.baeplatform.pm
   while True:
 
@@ -206,8 +207,8 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
     for id in pm.instances.keys():
       #print "id", id
       ins = pm.instances[id]
-      #ins.setByReqrate(rates[offset%len(rates)])
-      ins.setByReqrate(25)
+      ins.setByReqrate(1.0 * rates[id][offset%len(rates[id])] / q[id])
+      #ins.setByReqrate(1.0*25/q[id])
     pm.writeToFile()
     # DISPLAY CURRENT STATE
     state = environment.getCurrentState()
@@ -219,8 +220,8 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
       raise 'Error: Agent returned None action'
     
     # EXECUTE ACTION
-    nextState, reward = environment.doAction(state, action, pmNum,locks,pllock)
-    message("Started in state: "+str(state)+
+    nextState, reward = environment.doAction(state, action, pmNum,locks,pllock,q,plinfo)
+    message("VM " + str(pm.id) + " Started in state: "+str(state)+
             "\nTook action: "+str(action)+
             "\nEnded in state: "+str(nextState)+
             "\nGot reward: "+str(reward)+"\n")    
@@ -304,20 +305,26 @@ def parseOptions():
       
     return opts
 
-def run(i, env, s, episodes, a, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, pmNum, locks,pllock):
+def run(i, env, s, episodes, a, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, pmNum, locks,pllock,q,plinfo):
   s.acquire()  
   if episodes > 0:
     print
     print "VM ", i, "RUNNING", opts.episodes, "EPISODES"
     print
   infile = open('infile')
-  rates = []
+  rates = {}
   offset = 0
+  i = 0
   for line in infile:
-    rates.append(int(line))
+    rates[i] = []
+    for r in line.split():
+      rates[i].append(int(r))
+    i += 1
+  print rates
+
   returns = 0
   for episode in range(1, episodes+1):
-    tmpre, offset = runEpisode(a, env, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode, rates, offset, pmNum, locks, pllock)
+    tmpre, offset = runEpisode(a, env, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode, rates, offset, pmNum, locks, pllock,q,plinfo)
     returns += tmpre 
   if episodes > 0:
     print
@@ -325,34 +332,37 @@ def run(i, env, s, episodes, a, discount, decisionCallback, displayCallback, mes
     print 
     print
     
-    display.displayQValues(a, message = "VM " + i + " Q-VALUES AFTER "+str(episodes)+" EPISODES")
+    display.displayQValues(a, message = "VM " + str(i) + " Q-VALUES AFTER "+str(episodes)+" EPISODES")
     display.pause()
-    display.displayValues(a, message = "VM " + i + " VALUES AFTER "+str(episodes)+" EPISODES")
+    display.displayValues(a, message = "VM " + str(i) + " VALUES AFTER "+str(episodes)+" EPISODES")
     display.pause()
   s.release()  
   
 if __name__ == '__main__':
   
-  import multiprocessing
   import baeplatform
   opts = parseOptions()
   env = []
   locks = []
+  q = multiprocessing.Array('i', 128)
   pllock = multiprocessing.Semaphore(1)
+  plinfo = multiprocessing.Queue(128)
   for x in range(opts.pmNum):
     lock = multiprocessing.Semaphore(1)
     locks.append(lock)
-    pm = PhysicalMachine(x, lock)
+    pm = PhysicalMachine(x, lock, q, plinfo)
     name = 'vm_' + str(x) + '.info'
     outfile = open(name,'w')
     outfile.close()
     #if x==0: continue
     for i in range(25):
       pm.addInstance(i)
-    pm.writeToFile()
+    #pm.store()
     mdp = baeplatform.BaePlatform(pm, opts.iters)
     env.append(baeplatform.BaeplatformEnvironment(mdp))
-  
+  print plinfo.empty()
+  print plinfo.get()
+  time.sleep(120)
 
   ###########################
   # GET THE DISPLAY ADAPTER
@@ -415,9 +425,9 @@ if __name__ == '__main__':
         display.displayValues(tempAgent, message = "VALUES AFTER "+str(i)+" ITERATIONS")
         display.pause()        
     
-    display.displayValues(a, message = "VALUES AFTER "+str(opts.iters)+" ITERATIONS")
+    #display.displayValues(a, message = "VALUES AFTER "+str(opts.iters)+" ITERATIONS")
     display.pause()
-    display.displayQValues(a, message = "Q-VALUES AFTER "+str(opts.iters)+" ITERATIONS")
+    #display.displayQValues(a, message = "Q-VALUES AFTER "+str(opts.iters)+" ITERATIONS")
     display.pause()
     
   
@@ -451,10 +461,11 @@ if __name__ == '__main__':
   s = multiprocessing.Semaphore(len(env))
   execution_queue = []
   for i in range(len(env)):
-    p = multiprocessing.Process(target=run, args=(str(i), env[i],s,opts.episodes, a, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, opts.pmNum, locks, pllock))
+    p = multiprocessing.Process(target=run, args=(str(i), env[i],s,opts.episodes, a, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, opts.pmNum, locks, pllock, q, plinfo))
     p.start()
     execution_queue.append(p)
   for p in execution_queue:
     p.join()
 
-  
+  for i in range(30):
+    print q[i]
