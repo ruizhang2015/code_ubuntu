@@ -203,6 +203,7 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
       message("EPISODE "+str(episode)+" COMPLETE: RETURN WAS "+str(returns)+"\n")
       return returns, offset
     #print rates[offset%len(rates)]
+    pllock.acquire()
     pm.readFromFile()
     for id in pm.instances.keys():
       #print "id", id
@@ -210,6 +211,7 @@ def runEpisode(agent, environment, discount, decision, display, message, pause, 
       ins.setByReqrate(1.0 * rates[id][offset%len(rates[id])] / q[id])
       #ins.setByReqrate(1.0*25/q[id])
     pm.writeToFile()
+    pllock.release()
     # DISPLAY CURRENT STATE
     state = environment.getCurrentState()
     pause()
@@ -305,36 +307,27 @@ def parseOptions():
       
     return opts
 
-def run(i, env, s, episodes, a, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, pmNum, locks,pllock,q,plinfo):
+def run(rates,id, env, s, episodes, a, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, pmNum, locks,pllock,q,plinfo):
   s.acquire()  
   if episodes > 0:
     print
-    print "VM ", i, "RUNNING", opts.episodes, "EPISODES"
+    print "VM ", id, "RUNNING", opts.episodes, "EPISODES"
     print
-  infile = open('infile')
-  rates = {}
+  
   offset = 0
-  i = 0
-  for line in infile:
-    rates[i] = []
-    for r in line.split():
-      rates[i].append(int(r))
-    i += 1
-  print rates
-
   returns = 0
   for episode in range(1, episodes+1):
     tmpre, offset = runEpisode(a, env, discount, decisionCallback, displayCallback, messageCallback, pauseCallback, episode, rates, offset, pmNum, locks, pllock,q,plinfo)
     returns += tmpre 
   if episodes > 0:
     print
-    print "VM ", i, "AVERAGE RETURNS FROM START STATE: "+str((returns+0.0) / episodes)
+    print "VM ", id, "AVERAGE RETURNS FROM START STATE: "+str((returns+0.0) / episodes)
     print 
     print
     
-    display.displayQValues(a, message = "VM " + str(i) + " Q-VALUES AFTER "+str(episodes)+" EPISODES")
+    #display.displayQValues(a, message = "VM " + str(id) + " Q-VALUES AFTER "+str(episodes)+" EPISODES")
     display.pause()
-    display.displayValues(a, message = "VM " + str(i) + " VALUES AFTER "+str(episodes)+" EPISODES")
+    #display.displayValues(a, message = "VM " + str(id) + " VALUES AFTER "+str(episodes)+" EPISODES")
     display.pause()
   s.release()  
   
@@ -363,6 +356,15 @@ if __name__ == '__main__':
   #print plinfo.empty()
   #print plinfo.get()
   #time.sleep(120)
+  infile = open('infile')
+  rates = {}
+  i = 0
+  for line in infile:
+    rates[i] = []
+    for r in line.split():
+      rates[i].append(int(r))
+    i += 1
+  #print rates
 
   ###########################
   # GET THE DISPLAY ADAPTER
@@ -461,7 +463,7 @@ if __name__ == '__main__':
   s = multiprocessing.Semaphore(len(env))
   execution_queue = []
   for i in range(len(env)):
-    p = multiprocessing.Process(target=run, args=(str(i), env[i],s,opts.episodes, a, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, opts.pmNum, locks, pllock, q, plinfo))
+    p = multiprocessing.Process(target=run, args=(rates, str(i), env[i],s,opts.episodes, a, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback, opts.pmNum, locks, pllock, q, plinfo))
     p.start()
     execution_queue.append(p)
   for p in execution_queue:

@@ -133,12 +133,12 @@ class PhysicalMachine:
       self.writeToFile()
   '''
   def addInstance(self, insid):
-    print
-    print "BEGIN ", insid
+    #print
+    #print "BEGIN ", insid
     self.readFromFile()
     #self.load()
     if self.instances.has_key(insid):
-      print '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@'
+      #print '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@'
       ins = self.instances[insid]
       if self.cpu + ins.cpu <= 100 and self.mem + ins.rmem <= 100:
         self.cpu -= ins.cpu
@@ -182,6 +182,8 @@ class PhysicalMachine:
       self.cpu -= c
       self.mem -= m
       if ins.dup == 0:
+        print "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@", ins.dup,self.instances[insid].dup
+
         del self.instances[insid]
       self.q[insid] -= 1
       print "dec, insid, q", insid, self.q[insid]
@@ -332,7 +334,7 @@ class PlatformController:
     for pm in self.pms:
       if pm.instances.has_key(insid):
         n += pm.instances[insid].dup
-    print '~~~~~~',insid, n
+    print 'dec insid n',insid, n
     if n > 1:
       self.pms.sort(key = lambda pm : pm.mem, reverse = True)
       for pm in self.pms:
