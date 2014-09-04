@@ -77,4 +77,5 @@ class SimpleExtractor(FeatureExtractor):
       # will diverge wildly
       features["closest-food"] = float(dist) / (walls.width * walls.height) 
     features.divideAll(10.0)
+    print features
     return features

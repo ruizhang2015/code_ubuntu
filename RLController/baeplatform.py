@@ -360,9 +360,9 @@ if __name__ == '__main__':
     #pm.store()
     mdp = baeplatform.BaePlatform(pm, opts.iters)
     env.append(baeplatform.BaeplatformEnvironment(mdp))
-  print plinfo.empty()
-  print plinfo.get()
-  time.sleep(120)
+  #print plinfo.empty()
+  #print plinfo.get()
+  #time.sleep(120)
 
   ###########################
   # GET THE DISPLAY ADAPTER
