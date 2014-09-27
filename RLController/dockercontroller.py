@@ -4,8 +4,8 @@ import urllib
 import time
 import json
 import os
-from container_utils import *
 import logging
+import utils
 
 class Instance:
   def __init__(self, id, cpu = 0.0, mem = 1.0, rmem = 0.25, failed = False, pm = None, dup = 1):
@@ -68,15 +68,36 @@ class PhysicalMachine:
     self.id = id
     self.cpu = 0.0
     self.mem = 0.0
-    self.instances = {}
+
+  def getContainers(self):
+    return self.listContainers()
+
+  def getApps(self, pmid):
+    apps = {}
+    containers = self.listContainers(pmid)
+    for ctn in containers:
+      img = ctn['Image'].split(':')[0]
+      if apps.has_key(img):
+        apps[img].append(ctn['Id'])
+      else:
+        apps[img] = [ctn['Id']]
+    return apps
   
-  def listContainers(self):
+  def getContainers(self, pmid):
+    ctns = []
+    containers = self.listContainers(pmid)
+    for ctn in containers:
+      ctns.append(ctn['Id'])
+    return ctns
+  
+
+  def listContainers(self, pmid):
       # online: curl newsch.bce.duapp.com/igroup/getByGid -d '{"vcode":"qew$%^^21i412o3i4u12(*(*(*)(*)*@*)*)*!","gid":"27854"}'
         try:
             #headers = {"Content-Type":"application/json", "Connection":"Keep-Alive"}
             headers = {"Content-Type":"application/x-www-form-urlencoded", "Connection":"Keep-Alive"}
             params = {"all":0}
-            conn = httplib.HTTPConnection('127.0.0.1:4243')
+            conn = httplib.HTTPConnection('192.168.4.'+ str(pmid) + ':4243')
             #conn.request("POST",GET_APPID_URL,urllib.urlencode() json.JSONEncoder().encode(params), headers)
             conn.request("GET",'/containers/json',urllib.urlencode(params), headers)
             response = conn.getresponse()
@@ -88,35 +109,36 @@ class PhysicalMachine:
         except Exception as e:
             logging.exception('internal error happens: %s' % str(e))
             raise error_code.internal_err
-  def createContainer(self, args):
+  def createContainer(self, pmid, args):
       # online: curl newsch.bce.duapp.com/igroup/getByGid -d '{"vcode":"qew$%^^21i412o3i4u12(*(*(*)(*)*@*)*)*!","gid":"27854"}'
         try:
             headers = {"Content-Type":"application/json", "Connection":"Keep-Alive"}
             #headers = {"Content-Type":"application/x-www-form-urlencoded", "Connection":"Keep-Alive"}
-            params = {"Memory":134217728, "Image":args['Image'],"Cmd":args['Cmd']}
-            conn = httplib.HTTPConnection('127.0.0.1:4243')
+            img = args['Image']
+            params = {"Memory":134217728, "Image":img,"Cmd":args['Cmd']}
+            conn = httplib.HTTPConnection('192.168.4.'+ str(pmid) + ':4243')
             #conn.request("POST",GET_APPID_URL,urllib.urlencode() json.JSONEncoder().encode(params), headers)
             conn.request("POST",'/containers/create', json.JSONEncoder().encode(params), headers)
             response = conn.getresponse()
             if response.status == 201:
-                params = {"PortBindings":{ "5000/tcp": [{ "HostPort": "5003" }] }}
+                params = {"PortBindings":{ "5000/tcp": [{ "HostPort": args['Port'] }] }}
                 data = json.loads(response.read())
                 conn.request("POST",'/containers/'+ data['Id']+'/start', json.JSONEncoder().encode(params), headers)
                 response = conn.getresponse()
                 if response.status == 204:
                   return 'CREATE OK'
-            logging.debug(response.read())
+            print response.read()
         except Exception as e:
             logging.exception('internal error happens: %s' % str(e))
             raise error_code.internal_err
  
-  def listImages(self):
+  def listImages(self, pmid):
       # online: curl newsch.bce.duapp.com/igroup/getByGid -d '{"vcode":"qew$%^^21i412o3i4u12(*(*(*)(*)*@*)*)*!","gid":"27854"}'
         try:
             #headers = {"Content-Type":"application/json", "Connection":"Keep-Alive"}
             headers = {"Content-Type":"application/x-www-form-urlencoded", "Connection":"Keep-Alive"}
             params = {"all":0}
-            conn = httplib.HTTPConnection('127.0.0.1:4243')
+            conn = httplib.HTTPConnection('192.168.4.'+ str(pmid) + ':4243')
             #conn.request("POST",GET_APPID_URL,urllib.urlencode() json.JSONEncoder().encode(params), headers)
             conn.request("GET",'/images/json',urllib.urlencode(params), headers)
             response = conn.getresponse()
@@ -128,12 +150,18 @@ class PhysicalMachine:
         except Exception as e:
             logging.exception('internal error happens: %s' % str(e))
             raise error_code.internal_err
-  def killContainer(self, id):
+  def killContainer(self, pmid, image):
+        apps = self.getApps(pmid)
+        if len(apps[image]) == 1:
+          print 'only one left, cannot delete!'
+          return
       # online: curl newsch.bce.duapp.com/igroup/getByGid -d '{"vcode":"qew$%^^21i412o3i4u12(*(*(*)(*)*@*)*)*!","gid":"27854"}'
         try:
             #headers = {"Content-Type":"application/json", "Connection":"Keep-Alive"}
             headers = {"Content-Type":"application/x-www-form-urlencoded", "Connection":"Keep-Alive"}
-            conn = httplib.HTTPConnection('127.0.0.1:4243')
+            conn = httplib.HTTPConnection('192.168.4.'+ str(pmid) + ':4243')
+            id = apps[image][-1]
+            print id
             #conn.request("POST",GET_APPID_URL,urllib.urlencode() json.JSONEncoder().encode(params), headers)
             conn.request("POST",'/containers/'+ id  +'/kill',None, headers)
             response = conn.getresponse()
@@ -144,13 +172,13 @@ class PhysicalMachine:
         except Exception as e:
             logging.exception('internal error happens: %s' % str(e))
             raise error_code.internal_err
-  def getContainerImage(self, id):
+  def getContainerImage(self,pmid, id):
       # online: curl newsch.bce.duapp.com/igroup/getByGid -d '{"vcode":"qew$%^^21i412o3i4u12(*(*(*)(*)*@*)*)*!","gid":"27854"}'
         try:
             #headers = {"Content-Type":"application/json", "Connection":"Keep-Alive"}
             headers = {"Content-Type":"application/x-www-form-urlencoded", "Connection":"Keep-Alive"}
             #params = {"all":0}
-            conn = httplib.HTTPConnection('127.0.0.1:4243')
+            conn = httplib.HTTPConnection('192.168.4.'+ str(pmid) + ':4243')
             #conn.request("POST",GET_APPID_URL,urllib.urlencode() json.JSONEncoder().encode(params), headers)
             conn.request("GET",'/containers/'+ id  +'/json',None, headers)
             response = conn.getresponse()
@@ -163,92 +191,14 @@ class PhysicalMachine:
             logging.exception('internal error happens: %s' % str(e))
             raise error_code.internal_err
 
-
-  def addInstance(self, insid):
-    #print
-    #print "BEGIN ", insid
-    self.readFromFile()
-    #self.load()
-    if self.instances.has_key(insid):
-      #print '@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@'
-      ins = self.instances[insid]
-      if self.cpu + ins.cpu <= 100 and self.mem + ins.rmem <= 100:
-        self.cpu -= ins.cpu
-        ins.cpu = 0 # cpu clear
-        self.mem += ins.rmem
-        ins.dup += 1
-        ins.failed = False
-      else:
-        print self.id, 'add instance failed!'
-        return False
-    else:
-      ins = Instance(insid)
-      if self.cpu + ins.cpu <= 100 and self.mem + ins.rmem <= 100:
-        ins.pm = self
-        self.instances[ins.id] = ins
-        self.mem += ins.rmem
-      else:
-        print self.id, 'add instance failed!'
-        return False
-    print self.id, insid,'add instance suc!'
-    self.q[insid] += 1
-    print "add, insid, q", insid, self.q[insid]
-    self.writeToFile()
-    #self.store()
-    return True
-
-  def enlargeInstance(self, insid, dmem):
-    self.readFromFile()
-    #self.load()
-    if self.instances.has_key(insid):
-      self.instances[insid].addMem(dmem)
-      self.writeToFile()
-
-  def decInstance(self, insid):
-    self.readFromFile()
-    #self.load()
-    if self.instances.has_key(insid):
-      ins = self.instances[insid]
-      ins.dup -= 1
-      c, m = ins.cpu, ins.rmem
-      self.cpu -= c
-      self.mem -= m
-      if ins.dup == 0:
-        print "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@", ins.dup,self.instances[insid].dup
-
-        del self.instances[insid]
-      self.q[insid] -= 1
-      print "dec, insid, q", insid, self.q[insid]
-      self.writeToFile()
-      #self.store()
-      return True
-    return False
-
-  def shrinkInstance(self, insid, dmem):
-    self.readFromFile()
-    #self.load()
-    if self.instances.has_key(insid):
-      self.instances[insid].addMem(0 - dmem)
-      self.writeToFile()
-      
-  def listInstances(self):
-    self.readFromFile()
-    #self.load()
-    return self.instances.keys()
-  
-  def getInstance(self, insid):
-    self.readFromFile()
-    
-    #self.load()
-    return self.instances[insid]
-
-  def getInstanceState(self, container, last): 
-        now = time.time()
+  def getContainerState(self, container): 
+        #print (utils.get_file_content_cpu('/proc/stat'))
         CPU_BASE_DIR="/sys/fs/cgroup/cpuacct/docker/"
         p = utils.get_path_by_container(CPU_BASE_DIR, container, 'cpuacct.usage')
+        now = time.time()
         value = float(utils.get_file_content(p))
 
-        MEMOMRY_BASE_DIR="/sys/fs/cgroup/memory/docker/"
+        MEMORY_BASE_DIR="/sys/fs/cgroup/memory/docker/"
         p = utils.get_path_by_container(MEMORY_BASE_DIR, container, 'memory.usage_in_bytes')
         usages = float(utils.get_file_content(p))
         p = utils.get_path_by_container(MEMORY_BASE_DIR, container, 'memory.limit_in_bytes')
@@ -257,6 +207,7 @@ class PhysicalMachine:
         d = utils.get_file_content_kv(p)
         rss = d["rss"]
         cache = d["cache"]
+
         return {'time': now, 'cpu_usage': value/1e9,'rss': rss, 'cache': cache, 'usage': usages, 'limit': limits}
     
 
@@ -398,6 +349,19 @@ class PlatformController:
     return False
 
 if __name__ == '__main__':
-  ph = PhysicalMachine(1)
-  #print ph.createContainer(ph.getContainerImage('fd517'))
-  print ph.killContainer('360')
+  ph = PhysicalMachine(202)
+  last = {}
+  for ctn in ph.getContainers(202):
+    last[ctn] =  ph.getContainerState(ctn)
+  for _ in range(4):
+    for ctn in ph.getContainers(202):
+      time.sleep(2)
+      now =  ph.getContainerState(ctn)
+      print ctn, (now['cpu_usage']-last[ctn]['cpu_usage'])/(now['time']-last[ctn]['time']), now['usage']/now['limit'],
+      last[ctn] = now
+    print 
+  #print ph.getApps(203)
+  #print ph.createContainer(203, {'Image':'training/webapp', 'Cmd':["python", "app.py"], 'Port':'5004'})
+  #print ph.killContainer('training/webapp')
+  #print ph.killContainer('360')
+  #print ph.getApps(203)
