@@ -211,22 +211,28 @@ class PhysicalMachine:
         return {'time': now, 'cpu_usage': value/1e9,'rss': rss, 'cache': cache, 'usage': usages, 'limit': limits}
     
 
-  def getState(self):
-    self.readFromFile()
-    #self.load()
+  def getState(self, last):
+    cpu = 0
+    mem = 0
+    tmp = {}
+    for ctn in self.getContainers(self.id):
+      now =  self.getContainerState(ctn)
+      if last and last.has_key(ctn):
+        cpu += (now['cpu_usage']-last[ctn]['cpu_usage'])/(now['time']-last[ctn]['time'])
+      mem += now['usage']
+      tmp[ctn] = now
+    print tmp, cpu, mem
+    mem /= 39000000000   
     n = 0
-    for id in self.instances.keys():
-      ins = self.instances[id]
-      if ins.isFailed(): n += 1
-    if self.cpu < 20:
+    if cpu < 0.4:
       a = 0
-    elif self.cpu <80:
+    elif cpu < 1.6:
       a = 1
     else:
       a = 2
-    if self.mem < 20:
+    if mem < 0.20:
       b = 0
-    elif self.mem <80:
+    elif mem < 0.80:
       b = 1
     else:
       b = 2
@@ -238,8 +244,7 @@ class PhysicalMachine:
       c = 2
     else:
       c = 3
-    print (self.id,self.cpu,self.mem), (a,b,c) 
-    return (a,b,c)
+    return (a,b,c),tmp
 
   def writeToFile(self):
     self.lock.acquire()
