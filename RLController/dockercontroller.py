@@ -6,62 +6,7 @@ import json
 import os
 import logging
 import utils
-
-class Instance:
-  def __init__(self, id, cpu = 0.0, mem = 1.0, rmem = 0.25, failed = False, pm = None, dup = 1):
-    self.id = id
-    self.cpu = cpu  #single instance (not all dups)
-    self.mem = mem
-    self.rmem = rmem
-    self.failed = failed 
-    self.pm = pm
-    self.dup = dup
-  def toStruct(self):
-    return [self.id, self.cpu, self.mem, self.rmem, self.failed, self.dup]
-
-  def addMem(self, dmem):
-    tmp = self.mem + dmem
-    if tmp >= 0.25 and tmp <= 2:
-      self.mem = tmp
-      self.reset()
-    else:
-      print "illegal addMem!"
-
-  def isFailed(self):
-    return self.failed
-
-  def reset(self):
-    self.pm.cpu -= self.cpu
-    self.pm.mem = self.pm.mem - self.rmem + 0.25
-    self.cpu = 0.0
-    self.rmem = 0.25
-    self.failed = False
-
-  def setByReqrate(self, rate):
-    rate = 1.0 * rate / self.dup
-    c0 ,m0 = self.cpu, self.rmem
-    tmp = rate * 0.05
-    if tmp > m0:
-      if tmp <= self.mem:
-        self.rmem = tmp
-      else:
-        self.rmem = self.mem
-        self.failed = True
-    
-    self.cpu = 0.1 * rate
-    if self.cpu > 2:
-      self.cpu = 2
-      self.failed = True
-    
-    self.pm.cpu += (self.cpu - c0) * self.dup
-    self.pm.mem += (self.rmem - m0) * self.dup
-    if self.pm.cpu > 100:
-      print 'cpu error'
-      self.pm.cpu = 100
-    if self.pm.mem > 100:
-      print 'mem error'
-      self.pm.mem = 100
-    #print self.cpu,c0,self.rmem,m0
+import MySQLdb
 
 class PhysicalMachine:
   def __init__(self, id):
@@ -209,18 +154,57 @@ class PhysicalMachine:
         cache = d["cache"]
 
         return {'time': now, 'cpu_usage': value/1e9,'rss': rss, 'cache': cache, 'usage': usages, 'limit': limits}
-    
 
   def getState(self, last):
-    cpu = 0
-    mem = 0
+    ccpu,cpu = 0,0
+    cmem,mem = 0,0
     tmp = {}
-    for ctn in self.getContainers(self.id):
-      now =  self.getContainerState(ctn)
-      if last and last.has_key(ctn):
-        cpu += (now['cpu_usage']-last[ctn]['cpu_usage'])/(now['time']-last[ctn]['time'])
-      mem += now['usage']
-      tmp[ctn] = now
+    try:
+      conn=MySQLdb.connect(host='192.168.4.203',user='root',passwd='seforge520',db='dockerexp',port=3306)
+      cursor=conn.cursor()
+      cursor.execute('select * from consumption')
+      dctns = {}
+      ctn = ''
+      for row in cursor.fetchall():
+        ctn = row[0]
+        dctns[row[0]] = []
+        for r in row[1::]:
+          dctns[row[0]].append(r)
+      nparams = []
+      params = []
+      if ctn:
+        cur = (int(dctns[ctn][-1]) + 1) % 6
+      else:
+        cur = -1
+      for ctn in self.getContainers(self.id):
+        now =  self.getContainerState(ctn)
+        tmp[ctn] = now
+        if not dctns.has_key(ctn):
+          nparams.append((ctn,cur))
+          continue
+        #if last and last.has_key(ctn):
+        ccpu = (now['cpu_usage']-last[ctn]['cpu_usage'])/(now['time']-last[ctn]['time'])
+        cpu += ccpu
+        mem += now['usage']
+        cmem = now['usage']/now['limit']
+        params.append((ccpu,cmem,cur,ctn))
+      if nparams:
+        nsql = 'insert into consumption(id, cur) values(%s, %s)'
+        print nsql
+        print nparams
+        cursor.executemany(nsql, nparams)
+      if params:
+        sql = 'update consumption set cpu'+str(cur)+'=%s,mem'+str(cur)+'=%s,cur=%s where id = %s'
+        print sql
+        print params
+        cursor.executemany(sql, params)
+      cursor.close()
+      conn.commit()
+      conn.close()
+    except MySQLdb.Error,e:
+      print "Mysql Error %d: %s" % (e.args[0], e.args[1])
+
+   
     print tmp, cpu, mem
     mem /= 39000000000   
     n = 0
@@ -246,115 +230,123 @@ class PhysicalMachine:
       c = 3
     return (a,b,c),tmp
 
-  def writeToFile(self):
-    self.lock.acquire()
-    #print multiprocessing.current_process(), 'A', self.id
-    name = 'vm_' + str(self.id) + '.info'
-    outfile = open(name, 'w')
-    data = {}
-    data['id'] = self.id
-    data['cpu'] = self.cpu
-    data['mem'] = self.mem
-    inss = []
-    for insid in self.instances.keys():
-      ins = self.instances[insid]
-      inss.append((insid, ins.cpu, ins.mem, ins.rmem, ins.failed, ins.dup))
-    data['instances'] = inss
+  def clearData(self):
     try:
-      strs = json.dumps(data)
-    except:
-      print "!!!!", data
-    else:
-      outfile.write(strs)
-      return strs
-    finally:
-      outfile.close()
-      #print multiprocessing.current_process(), 'R', self.id
-      self.lock.release()
+      conn=MySQLdb.connect(host='192.168.4.203',user='root',passwd='seforge520',db='dockerexp',port=3306)
+      cursor=conn.cursor()
+      cursor.execute('delete from consumption')
+      cursor.close()
+      conn.commit()
+      conn.close()
+    except MySQLdb.Error,e:
+      print "Mysql Error %d: %s" % (e.args[0], e.args[1])
 
-  def readFromFile(self):
-    self.lock.acquire()
-    #print multiprocessing.current_process(), 'A', self.id
-    name = 'vm_' + str(self.id) + '.info'
-    infile = open(name, 'r')
-    strs = infile.read()
-    infile.close()
-    if not strs:
-      #print "???", self.id
-      #print multiprocessing.current_process(), 'B', self.id
-      self.lock.release()
-      return 
+
+  def initData(self):
     try:
-      data = json.loads(strs)
-    except:
-      print "#################", strs
-      #print multiprocessing.current_process(), 'B', self.id
-      self.lock.release()
-      return
-    self.cpu = data['cpu']
-    self.mem = data['mem']
-    self.instances = {}
-    for id, cpu, mem, rmem, failed, dup in data['instances']:
-      self.instances[id] = Instance(id, cpu, mem, rmem, failed, self, dup)
-    #print multiprocessing.current_process(), 'B', self.id
-    self.lock.release()
-    return strs
+      conn=MySQLdb.connect(host='192.168.4.203',user='root',passwd='seforge520',db='dockerexp',port=3306)
+      cursor=conn.cursor()
+      cursor.execute('delete from consumption')
+      last = {}
+      params = []
+      for ctn in self.getContainers(self.id):
+        last[ctn] =  self.getContainerState(ctn)
+        params.append(ctn)
+      sql = 'insert into consumption(id) values(%s)'
+      cursor.executemany(sql, params)
+      for cur in range(6):
+        time.sleep(1)
+        params = []
+        for ctn in self.getContainers(self.id):
+          now =  self.getContainerState(ctn)
+          if last and last.has_key(ctn):
+            cpu = (now['cpu_usage']-last[ctn]['cpu_usage'])/(now['time']-last[ctn]['time'])
+          mem = now['usage']/now['limit']
+          last[ctn] = now
+          params.append((cpu,mem,cur,ctn))
+        sql = 'update consumption set cpu'+str(cur)+'=%s,mem'+str(cur)+'=%s,cur=%s where id = %s'
+        print sql
+        print params
+        print cursor.executemany(sql, params)
+      cursor.close()
+      conn.commit()
+      conn.close()
+    except MySQLdb.Error,e:
+      print "Mysql Error %d: %s" % (e.args[0], e.args[1])
 
-class PlatformController:
-  def __init__(self, pmNum, locks, pllock, q, plinfo):
-    self.pmNum = pmNum
-    self.pms = []
-    self.locks = locks
-    self.pllock = pllock
-    self.q = q
-    self.plinfo = plinfo
-  
-  def load(self):
-    self.pms = []
-    for i in range(self.pmNum):
-      pm = PhysicalMachine(i, self.locks[i],self.q, self.plinfo)
-      if not pm.readFromFile():
-        print "AAA", pm.id
-        time.sleep(60)
-      #pm.load()
-      self.pms.append(pm)
+  def readMySQL(self):
+    try:
+      conn=MySQLdb.connect(host='192.168.4.203',user='root',passwd='seforge520',db='dockerexp',port=3306)
+      cursor=conn.cursor()
+      ctn = '8cd31d9844b7279e5c318ed9687655bde9a660a58c6c0a0abdc66eee35161f9cq' 
+      print cursor.execute('select * from consumption')
+      print cursor.fetchall()
+      cursor.close()
+      conn.commit()
+      conn.close()
+    except MySQLdb.Error,e:
+      print "Mysql Error %d: %s" % (e.args[0], e.args[1])
 
-  def add(self, ins):
-    self.pllock.acquire()
-    self.load()
-    self.pms.sort(key = lambda pm : pm.mem)
-    for pm in self.pms:
-      #print pm.id, pm.mem
-      if pm.addInstance(ins.id):
-        self.pllock.release()
-        return True
-    self.pllock.release()
-    return False
+  def mySQL(self):
+    ctns = self.getContainers(202)
+    params = []
+    cur = 0
+    for ctn in ctns:
+      res = self.getContainerState(ctn)
+      params.append((ctn, float(res['cpu_usage']),float(res['usage']/res['limit']),cur))
+    sql = 'insert into consumption(id,cpu'+str(cur)+',mem'+str(cur)+',cur) values(%s,%s,%s,%s)'
+    print sql
+    print params
+    try:
+      conn=MySQLdb.connect(host='192.168.4.203',user='root',passwd='seforge520',db='dockerexp',port=3306)
+      cursor=conn.cursor()
+      cursor.executemany(sql, params)
+      cursor.close()
+      conn.commit()
+      conn.close()
+    except MySQLdb.Error,e:
+      print "Mysql Error %d: %s" % (e.args[0], e.args[1])
 
-  def dec(self, insid):
-    #print multiprocessing.current_process(), 'wanto Al', self.pllock
-    self.pllock.acquire()
-    #print multiprocessing.current_process(), 'Al', self.pllock
-    n = 0
-    self.load()
-    for pm in self.pms:
-      if pm.instances.has_key(insid):
-        n += pm.instances[insid].dup
-    print 'dec insid n',insid, n
-    if n > 1:
-      self.pms.sort(key = lambda pm : pm.mem, reverse = True)
-      for pm in self.pms:
-        if pm.decInstance(insid):
-          print "successs dec", pm.id, insid,pm.cpu,pm.mem
-          #print multiprocessing.current_process(), 'Bl', self.pllock
-          self.pllock.release()
-          return True
-      #print multiprocessing.current_process(), 'Bl', self.pllock
-    self.pllock.release()
-    return False
+  def diff_expma(self, data, ratio=2):
+    y = 0
+    for i in range(1,len(data)):
+      y = 1.0 * (ratio * (float(data[i])-float(data[i-1])) + (i-1) * y) / (i-1+ratio)
+    return [y, float(data[-1])]
+
+  def compute_trend(self, id):
+    try:
+      conn=MySQLdb.connect(host='192.168.4.203',user='root',passwd='seforge520',db='dockerexp',port=3306)
+      cursor=conn.cursor()
+      n = cursor.execute('select * from consumption where id = %s', id)
+      if n == 0:
+        print 'No container info in database'
+      else:
+        for row in cursor.fetchall():
+          cur = int(row[-1])
+          cpudata = row[1:7:]
+          cpudata = cpudata[(cur+1)%6:6:] + cpudata[0:(cur+1)%6:]
+          cputrd = self.diff_expma(cpudata)
+          memdata = row[7:13:]
+          memdata = memdata[(cur+1)%6:6:] + memdata[0:(cur+1)%6:]
+          memtrd = self.diff_expma(memdata)
+      cursor.close()
+      conn.commit()
+      conn.close()
+    except MySQLdb.Error,e:
+      print "Mysql Error %d: %s" % (e.args[0], e.args[1])
+    return cputrd, memtrd
 
 if __name__ == '__main__':
   ph = PhysicalMachine(202)
+  ph.clearData()
+  last = None
+  for i in range(9):
+    _,last = ph.getState(last)
+    time.sleep(2)
+  print ph.compute_trend('3ddc7a209aecee63af10ba132fc89cdc7e47fac6e89ec5f1a8a662442fe5e50c')
+  
+  
+  '''
   last = {}
   for ctn in ph.getContainers(202):
     last[ctn] =  ph.getContainerState(ctn)
@@ -365,6 +357,7 @@ if __name__ == '__main__':
       print ctn, (now['cpu_usage']-last[ctn]['cpu_usage'])/(now['time']-last[ctn]['time']), now['usage']/now['limit'],
       last[ctn] = now
     print 
+  '''
   #print ph.getApps(203)
   #print ph.createContainer(203, {'Image':'training/webapp', 'Cmd':["python", "app.py"], 'Port':'5004'})
   #print ph.killContainer('training/webapp')

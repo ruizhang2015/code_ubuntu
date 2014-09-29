@@ -132,7 +132,7 @@ class BaeplatformEnvironment(environment.Environment):
     
   def __init__(self, baePlatform):
     self.baeplatform = baePlatform
-    self.reset()
+    #self.reset()
             
   def getCurrentState(self,last):
     return self.baeplatform.getState(last)
@@ -150,7 +150,10 @@ class BaeplatformEnvironment(environment.Environment):
         
   def reset(self,last = None):
     self.baeplatform.currentnum = 0
-    self.state, last = self.baeplatform.getState(last)
+    self.baeplatform.pm.clearData()
+    for i in range(7):
+      self.state, last = self.baeplatform.getState(last)
+      time.sleep(2)
     return last
   
   def isTerminal(self):
@@ -315,8 +318,8 @@ if __name__ == '__main__':
   
   import baeplatform
   opts = parseOptions()
-
-  pm = PhysicalMachine(202)
+  pmid = 202
+  pm = PhysicalMachine(pmid)
   mdp = baeplatform.BaePlatform(pm, opts.iters)
   env = baeplatform.BaeplatformEnvironment(mdp)
   infile = open('infile')
@@ -423,5 +426,5 @@ if __name__ == '__main__':
     decisionCallback = a.getAction  
     
   # RUN EPISODES
-  run(rates, str(i), env, opts.episodes, a, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback)
+  run(rates, pmid, env, opts.episodes, a, opts.discount, decisionCallback, displayCallback, messageCallback, pauseCallback)
 
